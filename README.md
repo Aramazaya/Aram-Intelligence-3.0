@@ -1,4 +1,6 @@
 # Tugas Besar 1 Pembelajaran Mesin
+![Neuron](https://github.com/Aramazaya/Aram-Intelligence-3.0/blob/ee653483010e770825784f6bd00dd56df2cf9fbe/doc/images%20(2).jpg)
+
 Implementation of Feedforward Neural Network (FFNN) from scratch
 
 ## Experiments
