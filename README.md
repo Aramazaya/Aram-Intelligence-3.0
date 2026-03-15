@@ -23,7 +23,6 @@ You do need to install all library:
 - numpy
 - seaborn
 - matplotlib
-- pybind11 (for I_AM_SPEED mode)
 
 ## Contributors
 <center>
