@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Dict
 import pandas as pd
 import numpy as np
 from adamoptimizer import AdamOptimizer
@@ -230,6 +230,7 @@ class FeedForwardNN:
         self.output_layer = Layer(neurons[-2], neurons[-1], self.activation_function[-1])
         self.res : List[List[Value]] = []
         self.loss = Value(0.0)
+        self.history: Dict[str, List[float]] = {"train_loss": [], "val_loss": []}
         self._initialize_weights(weight_init, weight_lb, weight_ub, weight_mean, weight_variance, seed)
 
     def _initialize_weights(self, method : str, lower_bound: float = 0.0, upper_bound: float = 1.0, mean: float = 0.0, variance : float = 1.0, seed : int = 42) -> None:
@@ -237,12 +238,28 @@ class FeedForwardNN:
         for layer in [self.input_layer] + self.hidden_layers + [self.output_layer]:
             layer.init_weights(method, lower_bound, upper_bound, mean, variance, seed)
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+    def fit(self, X: np.ndarray, y: np.ndarray, X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None) -> Dict[str, List[float]]:
         self.X = X
         self.y = y
-        self._train()
+        self.history = {"train_loss": [], "val_loss": []}
+        self._train(X_val=X_val, y_val=y_val)
+        return self.history
 
-    def _train(self) -> None:
+    def _compute_validation_loss(self, X_val: np.ndarray, y_val: np.ndarray) -> float:
+        """Compute loss on validation data without backprop (forward only)."""
+        old_res, old_y = self.res, self.y
+        self.res = []
+        self.y = np.asarray(y_val)
+        for idx in range(X_val.shape[0]):
+            x_input = [Value(X_val[idx, j]) for j in range(X_val.shape[1])]
+            self._forward_propagation(x_input)
+        loss_val = self._compute_loss(0).data
+        self._clear_graph()
+        self.res = old_res
+        self.y = old_y
+        return loss_val
+
+    def _train(self, X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None) -> None:
         for epoch in range(self.epochs):
             batch = 0
             epoch_loss = 0.0
@@ -261,8 +278,15 @@ class FeedForwardNN:
                 batch += 1
                 self.res = []
             avg_loss = epoch_loss / n_batches
+            self.history["train_loss"].append(avg_loss)
+            if X_val is not None and y_val is not None:
+                val_loss = self._compute_validation_loss(X_val, y_val)
+                self.history["val_loss"].append(val_loss)
             if self.verbose:
-                print(f'Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}')
+                msg = f'Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}'
+                if X_val is not None and y_val is not None:
+                    msg += f', Val Loss: {val_loss:.6f}'
+                print(msg)
 
             if avg_loss < self.loss_threshold:
                 print('Loss threshold reached. Stopping training.')
