@@ -1,6 +1,7 @@
 from typing import List
 import pandas as pd
 import numpy as np
+from adamoptimizer import AdamOptimizer
 
 
 class Value:
@@ -10,6 +11,7 @@ class Value:
         self._back = lambda: None
         self._prev = _prev if _prev is not None else set()
         self._op = _op
+        self._layer : List[Value] = []
     
     def __add__(self, other):
         other = other if isinstance(other, Value) else Value(other)
@@ -88,9 +90,50 @@ class Value:
         out._back = _back
         return out
 
+    def abs(self):
+        out = Value(abs(self.data), _prev={self}, _op='abs')
+        def _back():
+            self.gradient += (1.0 if self.data > 0 else -1.0) * out.gradient
+        out._back = _back
+        return out
+
+    def exp(self):
+        out = Value(np.exp(self.data), _prev={self}, _op='exp')
+        def _back():
+            self.gradient += out.data * out.gradient
+        out._back = _back
+        return out
+
+    def leaky_relu(self, alpha=0.01):
+        out = Value(self.data if self.data > 0 else alpha * self.data, _prev={self}, _op='leaky_relu')
+        def _back():
+            self.gradient += (1.0 if self.data > 0 else alpha) * out.gradient
+        out._back = _back
+        return out
+
+    def elu(self, alpha=1.0):
+        out = Value(self.data if self.data > 0 else alpha * (np.exp(self.data) - 1), _prev={self}, _op='elu')
+        def _back():
+            self.gradient += (1.0 if self.data > 0 else out.data + alpha) * out.gradient
+        out._back = _back
+        return out
+
     def softmax(self):
-        return
-    
+        layer = self._layer
+        exps = [np.exp(neuron.data) for neuron in layer]
+        sum_exps = sum(exps)
+        proba = [e / sum_exps for e in exps]
+        i = layer.index(self)
+        out = Value(proba[i], _prev=set(layer), _op='softmax')
+        def _back():
+            for j, neuron in enumerate(layer):
+                if j == i:
+                    neuron.gradient += proba[i]*(1-proba[i]) * out.gradient
+                else:
+                    neuron.gradient += -proba[i]*proba[j] * out.gradient
+        out._back = _back
+        return out
+
     def back(self):
         topo = []
         visited = set()
@@ -133,6 +176,9 @@ class Layer:
 
     def forward(self, x: List[Value]) -> List[Value]:
         z = [sum(x[i]*self.weights[i][j] for i in range(self.input_size)) + self.biases[j] for j in range(self.output_size)]
+        if self.activation_function == "softmax":
+            for node in z:
+                node._layer = z
         act = getattr(Value, self.activation_function)
         return [act(val) for val in z]
 
@@ -155,11 +201,12 @@ class FeedForwardNN:
     weight_mean (0.0) : mean for normal weight initialization -- Float
     weight_variance (1.0) : variance for normal weight initialization -- Float
     """
-    def __init__(self, neurons: List[int], activation_function: List[str] = [], 
-                 loss_function: str = 'mse', learning_rate: float = 0.1, loss_threshold: float = 0.01, 
-                 epochs: int = 100, seed: int = 42, weight_init: str = "zeros", 
-                 weight_ub: float = 1.0, weight_lb: float = 0.0, weight_mean: float = 0.0, 
-                 weight_variance: float = 1.0, batch_size: int = 32, verbose: bool = True):
+    def __init__(self, neurons: List[int], activation_function: List[str] = [],
+                 loss_function: str = 'mse', learning_rate: float = 0.1, loss_threshold: float = 0.01,
+                 epochs: int = 100, seed: int = 42, weight_init: str = "zeros",
+                 weight_ub: float = 1.0, weight_lb: float = 0.0, weight_mean: float = 0.0,
+                 weight_variance: float = 1.0, batch_size: int = 32, verbose: bool = True,
+                 l1: float = 0.0, l2: float = 0.0, optimizer: str = 'sgd', adam_beta1: float = 0.9, adam_beta2: float = 0.999, adam_epsilon: float = 1e-8):
         self.neurons = neurons
         if not activation_function:
             self.activation_function = ['linear' for _ in range(len(neurons) - 1)]
@@ -175,6 +222,9 @@ class FeedForwardNN:
         self.y = np.array([])
         self.verbose = verbose
         self.batch_size = batch_size
+        self.l1 = l1
+        self.l2 = l2
+        self._adam = AdamOptimizer(alpha=learning_rate, beta1=adam_beta1, beta2=adam_beta2, epsilon=adam_epsilon) if optimizer == 'adam' else None
         self.input_layer = Layer(neurons[0], neurons[1], self.activation_function[0])
         self.hidden_layers = [Layer(neurons[i], neurons[i+1], self.activation_function[i]) for i in range(1, len(neurons)-2)]
         self.output_layer = Layer(neurons[-2], neurons[-1], self.activation_function[-1])
@@ -182,7 +232,6 @@ class FeedForwardNN:
         self.loss = Value(0.0)
         self._initialize_weights(weight_init, weight_lb, weight_ub, weight_mean, weight_variance, seed)
 
-    pd.DataFrame
     def _initialize_weights(self, method : str, lower_bound: float = 0.0, upper_bound: float = 1.0, mean: float = 0.0, variance : float = 1.0, seed : int = 42) -> None:
         np.random.seed(seed)
         for layer in [self.input_layer] + self.hidden_layers + [self.output_layer]:
@@ -212,16 +261,8 @@ class FeedForwardNN:
                 batch += 1
                 self.res = []
             avg_loss = epoch_loss / n_batches
-            idx0 = np.where(self.y == 0)[0][0]
-            idx1 = np.where(self.y == 1)[0][0]
-            sample_outs = []
-            for idx in [idx0, idx1]:
-                x_sample = [Value(self.X[idx, j]) for j in range(self.X.shape[1])]
-                self._forward_propagation(x_sample)
-                sample_outs.append(round(self.res[-1][0].data, 6))
-                self.res = []
             if self.verbose:
-                print(f'Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}, y=0: {sample_outs[0]}, y=1: {sample_outs[1]}')
+                print(f'Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}')
 
             if avg_loss < self.loss_threshold:
                 print('Loss threshold reached. Stopping training.')
@@ -242,24 +283,45 @@ class FeedForwardNN:
                 for j in range(len(self.res[i])):
                     target = float(y_i[j]) if hasattr(y_i, '__len__') else float(y_i)
                     total += (self.res[i][j] - Value(target)) ** 2
-            return total * (1 / len(self.res))
+            total = total * (1 / len(self.res))
         elif self.loss_function == "binary_cross_entropy":
             for i in range(len(self.res)):
-                p = self.res[i][0]
-                y = float(self.y[i+offset])
-                total += -(Value(y) * p.log() + Value(1 - y) * (Value(1.0) - p).log())
-            return total * (1 / len(self.res))
-        elif self.loss_function == "categorical_cross_entropy":
-            for i in range(len(self.res)):
+                y_i = self.y[i+offset]
+                if not hasattr(y_i, '__len__'):
+                    target = [1.0 - float(y_i), float(y_i)]
+                else:
+                    target = y_i
                 for j in range(len(self.res[i])):
-                    total += -(Value(float(self.y[i+offset][j])) * self.res[i][j].log())
-            return total * (1 / len(self.res))
+                    p = self.res[i][j]
+                    y = float(target[j])
+                    total += -(Value(y) * p.log() + Value(1 - y) * (Value(1.0) - p).log())
+            total = total * (1 / len(self.res))
+        elif self.loss_function == "categorical_cross_entropy":
+            n_classes = len(self.res[0])
+            for i in range(len(self.res)):
+                y_i = self.y[i+offset]
+                if not hasattr(y_i, '__len__'):
+                    target = [1.0 if j == int(y_i) else 0.0 for j in range(n_classes)]
+                else:
+                    target = y_i
+                for j in range(len(self.res[i])):
+                    total += -(Value(float(target[j])) * self.res[i][j].log())
+            total = total * (1 / len(self.res))
         else:
             print(f"Unknown loss function '{self.loss_function}'. Defaulting to MSE.")
             for i in range(len(self.res)):
                 for j in range(len(self.res[i])):
                     total += (self.res[i][j] - Value(float(self.y[i+offset][j]))) ** 2
-            return total * (1 / len(self.res))
+            total = total * (1 / len(self.res))
+        all_layers = [self.input_layer] + self.hidden_layers + [self.output_layer]
+        for layer in all_layers:
+            for row in layer.weights:
+                for w in row:
+                    if self.l1 > 0:
+                        total += Value(self.l1) * w.abs()
+                    if self.l2 > 0:
+                        total += Value(self.l2) * w ** 2
+        return total
 
     def _clear_graph(self) -> None:
         visited = set()
@@ -275,14 +337,39 @@ class FeedForwardNN:
 
     def _backward_propagation(self) -> None:
         self.loss.back()
-        for layer in [self.input_layer] + self.hidden_layers + [self.output_layer]:
-            for neuron in layer.weights:
-                for weight in neuron:
-                    weight.data -= self.learning_rate * weight.gradient
-                    weight.gradient = 0.0
-            for bias in layer.biases:
-                bias.data -= self.learning_rate * bias.gradient
-                bias.gradient = 0.0
+        all_layers = [self.input_layer] + self.hidden_layers + [self.output_layer]
+        if self._adam is not None:
+            all_params = []
+            all_grads = []
+            for layer in all_layers:
+                for neuron in layer.weights:
+                    for w in neuron:
+                        all_params.append(w.data)
+                        all_grads.append(w.gradient)
+                for bias in layer.biases:
+                    all_params.append(bias.data)
+                    all_grads.append(bias.gradient)
+            updated = self._adam.step(np.array(all_params), np.array(all_grads))
+            idx = 0
+            for layer in all_layers:
+                for neuron in layer.weights:
+                    for w in neuron:
+                        w.data = updated[idx]
+                        w.gradient = 0.0
+                        idx += 1
+                for bias in layer.biases:
+                    bias.data = updated[idx]
+                    bias.gradient = 0.0
+                    idx += 1
+        else:
+            for layer in all_layers:
+                for neuron in layer.weights:
+                    for weight in neuron:
+                        weight.data -= self.learning_rate * weight.gradient
+                        weight.gradient = 0.0
+                for bias in layer.biases:
+                    bias.data -= self.learning_rate * bias.gradient
+                    bias.gradient = 0.0
         self._clear_graph()
 
     def inspect(self, x_row: np.ndarray) -> None:
