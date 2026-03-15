@@ -81,6 +81,13 @@ class Value:
         out._back = _back
         return out
     
+    def log(self):
+        out = Value(np.log(self.data + 1e-7), _prev={self}, _op='log')
+        def _back():
+            self.gradient += (1 / (self.data + 1e-7)) * out.gradient
+        out._back = _back
+        return out
+
     def softmax(self):
         return
     
@@ -152,7 +159,7 @@ class FeedForwardNN:
                  loss_function: str = 'mse', learning_rate: float = 0.1, loss_threshold: float = 0.01, 
                  epochs: int = 100, seed: int = 42, weight_init: str = "zeros", 
                  weight_ub: float = 1.0, weight_lb: float = 0.0, weight_mean: float = 0.0, 
-                 weight_variance: float = 1.0, batch_size: int = 32):
+                 weight_variance: float = 1.0, batch_size: int = 32, verbose: bool = True):
         self.neurons = neurons
         if not activation_function:
             self.activation_function = ['linear' for _ in range(len(neurons) - 1)]
@@ -164,8 +171,9 @@ class FeedForwardNN:
         self.learning_rate = learning_rate
         self.loss_threshold = loss_threshold
         self.epochs = epochs
-        self.X = pd.DataFrame()
-        self.y = pd.Series()
+        self.X = np.array([])
+        self.y = np.array([])
+        self.verbose = verbose
         self.batch_size = batch_size
         self.input_layer = Layer(neurons[0], neurons[1], self.activation_function[0])
         self.hidden_layers = [Layer(neurons[i], neurons[i+1], self.activation_function[i]) for i in range(1, len(neurons)-2)]
@@ -180,7 +188,7 @@ class FeedForwardNN:
         for layer in [self.input_layer] + self.hidden_layers + [self.output_layer]:
             layer.init_weights(method, lower_bound, upper_bound, mean, variance, seed)
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         self.X = X
         self.y = y
         self._train()
@@ -188,19 +196,34 @@ class FeedForwardNN:
     def _train(self) -> None:
         for epoch in range(self.epochs):
             batch = 0
+            epoch_loss = 0.0
+            n_batches = 0
             while batch*self.batch_size < self.X.shape[0]:
                 for i in range(self.batch_size):
                     idx = i + batch * self.batch_size
                     if idx >= self.X.shape[0]:
                         break
-                    x_input = [Value(self.X.iloc[idx, j]) for j in range(self.X.shape[1])]
+                    x_input = [Value(self.X[idx, j]) for j in range(self.X.shape[1])]
                     self._forward_propagation(x_input)
                 self.loss = self._compute_loss(batch * self.batch_size)
+                epoch_loss += self.loss.data
+                n_batches += 1
                 self._backward_propagation()
-                batch +=1
+                batch += 1
                 self.res = []
-            print(f'Epoch {epoch+1}/{self.epochs}, Loss: {self.loss}')
-            if self.loss.data < self.loss_threshold:
+            avg_loss = epoch_loss / n_batches
+            idx0 = np.where(self.y == 0)[0][0]
+            idx1 = np.where(self.y == 1)[0][0]
+            sample_outs = []
+            for idx in [idx0, idx1]:
+                x_sample = [Value(self.X[idx, j]) for j in range(self.X.shape[1])]
+                self._forward_propagation(x_sample)
+                sample_outs.append(round(self.res[-1][0].data, 6))
+                self.res = []
+            if self.verbose:
+                print(f'Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}, y=0: {sample_outs[0]}, y=1: {sample_outs[1]}')
+
+            if avg_loss < self.loss_threshold:
                 print('Loss threshold reached. Stopping training.')
                 break
 
@@ -215,26 +238,40 @@ class FeedForwardNN:
         total = Value(0.0)
         if self.loss_function == 'mse':
             for i in range(len(self.res)):
-                for j in range (len(self.res[i])):
-                    total += (self.res[i][j] - Value(self.y.iloc[i+offset])) ** 2
+                y_i = self.y[i+offset]
+                for j in range(len(self.res[i])):
+                    target = float(y_i[j]) if hasattr(y_i, '__len__') else float(y_i)
+                    total += (self.res[i][j] - Value(target)) ** 2
             return total * (1 / len(self.res))
         elif self.loss_function == "binary_cross_entropy":
             for i in range(len(self.res)):
-                for j in range (len(self.res[i])):
-                    p = self.res[i][j].sigmoid()
-                    total += -(Value(self.y.iloc[i+offset]) * p) - (Value(1 - self.y.iloc[i+offset]) * (1 - p))
+                p = self.res[i][0]
+                y = float(self.y[i+offset])
+                total += -(Value(y) * p.log() + Value(1 - y) * (Value(1.0) - p).log())
             return total * (1 / len(self.res))
         elif self.loss_function == "categorical_cross_entropy":
             for i in range(len(self.res)):
-                for j in range (len(self.res[i])):
-                    total += -(Value(self.y.iloc[i+offset]) * self.res[i][j])
+                for j in range(len(self.res[i])):
+                    total += -(Value(float(self.y[i+offset][j])) * self.res[i][j].log())
             return total * (1 / len(self.res))
         else:
             print(f"Unknown loss function '{self.loss_function}'. Defaulting to MSE.")
             for i in range(len(self.res)):
-                for j in range (len(self.res[i])):
-                    total += (self.res[i][j] - Value(self.y.iloc[i+offset])) ** 2
+                for j in range(len(self.res[i])):
+                    total += (self.res[i][j] - Value(float(self.y[i+offset][j]))) ** 2
             return total * (1 / len(self.res))
+
+    def _clear_graph(self) -> None:
+        visited = set()
+        stack = [self.loss]
+        while stack:
+            node = stack.pop()
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            stack.extend(node._prev)
+            node._back = lambda: None
+            node._prev = set()
 
     def _backward_propagation(self) -> None:
         self.loss.back()
@@ -246,10 +283,22 @@ class FeedForwardNN:
             for bias in layer.biases:
                 bias.data -= self.learning_rate * bias.gradient
                 bias.gradient = 0.0
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        self._clear_graph()
+
+    def inspect(self, x_row: np.ndarray) -> None:
+        self.res = []
+        x_input = [Value(x_row[j]) for j in range(len(x_row))]
+        self._forward_propagation(x_input)
+        print("Raw output values:", [round(v.data, 6) for v in self.res[-1]])
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
         predictions = []
+        self.res = []
         for i in range(X.shape[0]):
-            x_input = [Value(X.iloc[i, j]) for j in range(X.shape[1])]
+            x_input = [Value(X[i, j]) for j in range(X.shape[1])]
             self._forward_propagation(x_input)
             predictions.append([neuron.data for neuron in self.res[-1]])
-        return np.array(predictions)
+        arr = np.array(predictions)
+        if arr.shape[1] == 1:
+            return arr.flatten()  
+        return np.argmax(arr, axis=1).astype(int)
