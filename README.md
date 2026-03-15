@@ -21,6 +21,6 @@ Simply open the notebook with a supported application or website such as an IDE,
 | Nama | NIM | Pembagian Tugas |
 |----------|----------| -- |
 | Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer |
-| Aramazaya | 13523082 | FFNN model |
+| Aramazaya | 13523082 | FFNN model, Autograd |
 
 </center>
