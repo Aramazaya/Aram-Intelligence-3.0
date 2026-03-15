@@ -30,7 +30,7 @@ You do need to install all library:
 
 | Nama | NIM | Pembagian Tugas |
 |----------|----------| -- |
-| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer |
+| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer, Notebook |
 | Aramazaya | 13523082 | FFNN model, Autograd, Xavier&He Weight, Leaky ReLU & eLU |
 
 </center>
