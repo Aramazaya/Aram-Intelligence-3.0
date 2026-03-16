@@ -12,7 +12,7 @@ class Value:
         self._prev = _prev if _prev is not None else set()
         self._op = _op
         self._layer : List[Value] = []
-    
+
     def __add__(self, other):
         other = other if isinstance(other, Value) else Value(other)
         out = Value(self.data + other.data, _prev={self, other}, _op='+')
@@ -21,7 +21,7 @@ class Value:
             other.gradient += out.gradient
         out._back = _back
         return out
-    
+
     def __mul__(self, other):
         other = other if isinstance(other, Value) else Value(other)
         out = Value(self.data * other.data, _prev={self, other}, _op='*')
@@ -30,7 +30,7 @@ class Value:
             other.gradient += self.data * out.gradient
         out._back = _back
         return out
-    
+
     def __pow__(self, other):
         out = Value(self.data ** other, _prev={self}, _op='**')
         def _back():
@@ -52,7 +52,7 @@ class Value:
 
     def __rmul__(self, other):
         return self * other
-    
+
     def sigmoid(self):
         s = 1 / (1 + np.exp(-self.data))
         out = Value(s, _prev={self}, _op='sigmoid')
@@ -67,7 +67,7 @@ class Value:
             self.gradient += (out.data > 0) * out.gradient
         out._back = _back
         return out
-    
+
     def tanh(self):
         t = np.tanh(self.data)
         out = Value(t, _prev={self}, _op='tanh')
@@ -75,14 +75,14 @@ class Value:
             self.gradient += (1 - t ** 2) * out.gradient
         out._back = _back
         return out
-    
+
     def linear(self):
         out = Value(self.data, _prev={self}, _op='linear')
         def _back():
             self.gradient += out.gradient
         out._back = _back
         return out
-    
+
     def log(self):
         out = Value(np.log(self.data + 1e-7), _prev={self}, _op='log')
         def _back():
@@ -148,14 +148,27 @@ class Value:
         for node in reversed(topo):
             node._back()
 
+    def clear_graph(self):
+        visited = set()
+        stack = [self]
+        while stack:
+            node = stack.pop()
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            stack.extend(node._prev)
+            node._back = lambda: None
+            node._prev = set()
+
 
 class Layer:
-    def __init__ (self, input_size: int, output_size: int, activation_function: str = ""):
+    def __init__(self, input_size: int, output_size: int, activation_function: str = "", _V=None):
         self.input_size = input_size
         self.output_size = output_size
         self.activation_function = activation_function
         self.weights = []
         self.biases = []
+        self._V = _V or Value
 
     def init_weights(self, method: str, lower_bound: float = 0.0, upper_bound: float = 1.0, mean: float = 0.0, variance: float = 1.0, seed: int = 42) -> None:
         if method == "zeros":
@@ -167,19 +180,27 @@ class Layer:
         elif method == "normal":
             w = np.random.normal(mean, variance, (self.input_size, self.output_size))
             b = np.random.normal(mean, variance, self.output_size)
+        elif method == "xavier":
+            limit = np.sqrt(6 / (self.input_size + self.output_size))
+            w = np.random.uniform(-limit, limit, (self.input_size, self.output_size))
+            b = np.random.uniform(-limit, limit, self.output_size)
+        elif method == "he":
+            stddev = np.sqrt(2 / self.input_size)
+            w = np.random.normal(0, stddev, (self.input_size, self.output_size))
+            b = np.random.normal(0, stddev, self.output_size)
         else:
             print(f"Unknown weight initialization method '{method}'. Defaulting to zeros.")
             w = np.zeros((self.input_size, self.output_size))
             b = np.zeros(self.output_size)
-        self.weights = [[Value(w[i][j]) for j in range(self.output_size)] for i in range(self.input_size)]
-        self.biases = [Value(b[j]) for j in range(self.output_size)]
+        self.weights = [[self._V(w[i][j]) for j in range(self.output_size)] for i in range(self.input_size)]
+        self.biases = [self._V(b[j]) for j in range(self.output_size)]
 
-    def forward(self, x: List[Value]) -> List[Value]:
+    def forward(self, x: List) -> List:
         z = [sum(x[i]*self.weights[i][j] for i in range(self.input_size)) + self.biases[j] for j in range(self.output_size)]
         if self.activation_function == "softmax":
             for node in z:
                 node._layer = z
-        act = getattr(Value, self.activation_function)
+        act = getattr(self._V, self.activation_function)
         return [act(val) for val in z]
 
 
@@ -200,13 +221,27 @@ class FeedForwardNN:
     weight_lb (0.0) : lower bound for random weight initialization -- Float
     weight_mean (0.0) : mean for normal weight initialization -- Float
     weight_variance (1.0) : variance for normal weight initialization -- Float
+    I_AM_SPEED (False) : use compiled C++ autograd backend if True -- Bool
     """
     def __init__(self, neurons: List[int], activation_function: List[str] = [],
                  loss_function: str = 'mse', learning_rate: float = 0.1, loss_threshold: float = 0.01,
                  epochs: int = 100, seed: int = 42, weight_init: str = "zeros",
                  weight_ub: float = 1.0, weight_lb: float = 0.0, weight_mean: float = 0.0,
                  weight_variance: float = 1.0, batch_size: int = 32, verbose: bool = True,
-                 l1: float = 0.0, l2: float = 0.0, optimizer: str = 'sgd', adam_beta1: float = 0.9, adam_beta2: float = 0.999, adam_epsilon: float = 1e-8):
+                 l1: float = 0.0, l2: float = 0.0, optimizer: str = 'sgd',
+                 adam_beta1: float = 0.9, adam_beta2: float = 0.999, adam_epsilon: float = 1e-8,
+                 I_AM_SPEED: bool = False):
+        if I_AM_SPEED:
+            try:
+                from back_prop import Value as CppValue
+                self._V = CppValue
+                print("I AM SPEED")
+            except ImportError:
+                self._V = Value
+                print("C++ backend not found, compile back_prop.cpp first. Falling back to Python.")
+        else:
+            self._V = Value
+
         self.neurons = neurons
         if not activation_function:
             self.activation_function = ['linear' for _ in range(len(neurons) - 1)]
@@ -225,11 +260,11 @@ class FeedForwardNN:
         self.l1 = l1
         self.l2 = l2
         self._adam = AdamOptimizer(alpha=learning_rate, beta1=adam_beta1, beta2=adam_beta2, epsilon=adam_epsilon) if optimizer == 'adam' else None
-        self.input_layer = Layer(neurons[0], neurons[1], self.activation_function[0])
-        self.hidden_layers = [Layer(neurons[i], neurons[i+1], self.activation_function[i]) for i in range(1, len(neurons)-2)]
-        self.output_layer = Layer(neurons[-2], neurons[-1], self.activation_function[-1])
-        self.res : List[List[Value]] = []
-        self.loss = Value(0.0)
+        self.input_layer = Layer(neurons[0], neurons[1], self.activation_function[0], _V=self._V)
+        self.hidden_layers = [Layer(neurons[i], neurons[i+1], self.activation_function[i], _V=self._V) for i in range(1, len(neurons)-2)]
+        self.output_layer = Layer(neurons[-2], neurons[-1], self.activation_function[-1], _V=self._V)
+        self.res : List[List] = []
+        self.loss = self._V(0.0)
         self._initialize_weights(weight_init, weight_lb, weight_ub, weight_mean, weight_variance, seed)
 
     def _initialize_weights(self, method : str, lower_bound: float = 0.0, upper_bound: float = 1.0, mean: float = 0.0, variance : float = 1.0, seed : int = 42) -> None:
@@ -252,7 +287,7 @@ class FeedForwardNN:
                     idx = i + batch * self.batch_size
                     if idx >= self.X.shape[0]:
                         break
-                    x_input = [Value(self.X[idx, j]) for j in range(self.X.shape[1])]
+                    x_input = [self._V(self.X[idx, j]) for j in range(self.X.shape[1])]
                     self._forward_propagation(x_input)
                 self.loss = self._compute_loss(batch * self.batch_size)
                 epoch_loss += self.loss.data
@@ -275,14 +310,15 @@ class FeedForwardNN:
         out = self.output_layer.forward(out)
         self.res.append(out)
 
-    def _compute_loss(self, offset: int = 0) -> Value:
-        total = Value(0.0)
+    def _compute_loss(self, offset: int = 0):
+        V = self._V
+        total = V(0.0)
         if self.loss_function == 'mse':
             for i in range(len(self.res)):
                 y_i = self.y[i+offset]
                 for j in range(len(self.res[i])):
                     target = float(y_i[j]) if hasattr(y_i, '__len__') else float(y_i)
-                    total += (self.res[i][j] - Value(target)) ** 2
+                    total += (self.res[i][j] - V(target)) ** 2
             total = total * (1 / len(self.res))
         elif self.loss_function == "binary_cross_entropy":
             for i in range(len(self.res)):
@@ -294,7 +330,7 @@ class FeedForwardNN:
                 for j in range(len(self.res[i])):
                     p = self.res[i][j]
                     y = float(target[j])
-                    total += -(Value(y) * p.log() + Value(1 - y) * (Value(1.0) - p).log())
+                    total += -(V(y) * p.log() + V(1 - y) * (V(1.0) - p).log())
             total = total * (1 / len(self.res))
         elif self.loss_function == "categorical_cross_entropy":
             n_classes = len(self.res[0])
@@ -305,35 +341,23 @@ class FeedForwardNN:
                 else:
                     target = y_i
                 for j in range(len(self.res[i])):
-                    total += -(Value(float(target[j])) * self.res[i][j].log())
+                    total += -(V(float(target[j])) * self.res[i][j].log())
             total = total * (1 / len(self.res))
         else:
             print(f"Unknown loss function '{self.loss_function}'. Defaulting to MSE.")
             for i in range(len(self.res)):
                 for j in range(len(self.res[i])):
-                    total += (self.res[i][j] - Value(float(self.y[i+offset][j]))) ** 2
+                    total += (self.res[i][j] - V(float(self.y[i+offset][j]))) ** 2
             total = total * (1 / len(self.res))
         all_layers = [self.input_layer] + self.hidden_layers + [self.output_layer]
         for layer in all_layers:
             for row in layer.weights:
                 for w in row:
                     if self.l1 > 0:
-                        total += Value(self.l1) * w.abs()
+                        total += V(self.l1) * w.abs()
                     if self.l2 > 0:
-                        total += Value(self.l2) * w ** 2
+                        total += V(self.l2) * w ** 2
         return total
-
-    def _clear_graph(self) -> None:
-        visited = set()
-        stack = [self.loss]
-        while stack:
-            node = stack.pop()
-            if id(node) in visited:
-                continue
-            visited.add(id(node))
-            stack.extend(node._prev)
-            node._back = lambda: None
-            node._prev = set()
 
     def _backward_propagation(self) -> None:
         self.loss.back()
@@ -370,11 +394,11 @@ class FeedForwardNN:
                 for bias in layer.biases:
                     bias.data -= self.learning_rate * bias.gradient
                     bias.gradient = 0.0
-        self._clear_graph()
+        self.loss.clear_graph()
 
     def inspect(self, x_row: np.ndarray) -> None:
         self.res = []
-        x_input = [Value(x_row[j]) for j in range(len(x_row))]
+        x_input = [self._V(x_row[j]) for j in range(len(x_row))]
         self._forward_propagation(x_input)
         print("Raw output values:", [round(v.data, 6) for v in self.res[-1]])
 
@@ -382,10 +406,10 @@ class FeedForwardNN:
         predictions = []
         self.res = []
         for i in range(X.shape[0]):
-            x_input = [Value(X[i, j]) for j in range(X.shape[1])]
+            x_input = [self._V(X[i, j]) for j in range(X.shape[1])]
             self._forward_propagation(x_input)
             predictions.append([neuron.data for neuron in self.res[-1]])
         arr = np.array(predictions)
         if arr.shape[1] == 1:
-            return arr.flatten()  
+            return arr.flatten()
         return np.argmax(arr, axis=1).astype(int)
