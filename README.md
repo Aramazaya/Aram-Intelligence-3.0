@@ -17,12 +17,19 @@ All algorithms, dataset, as well as the necessary imports have been put together
 
 Simply open the notebook with a supported application or website such as an IDE, Google Colab, Deepnote, etc. and press the `Run All` Button.
 
+You do need to install all library:
+- sklearn
+- pandas
+- numpy
+- seaborn
+- matplotlib
+
 ## Contributors
 <center>
 
 | Nama | NIM | Pembagian Tugas |
 |----------|----------| -- |
-| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer |
-| Aramazaya | 13523082 | FFNN model, Autograd |
+| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer, Notebook |
+| Aramazaya | 13523082 | FFNN model, Autograd, Xavier&He Weight, Leaky ReLU & eLU |
 
 </center>
