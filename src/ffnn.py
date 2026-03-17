@@ -221,7 +221,6 @@ class FeedForwardNN:
     weight_lb (0.0) : lower bound for random weight initialization -- Float
     weight_mean (0.0) : mean for normal weight initialization -- Float
     weight_variance (1.0) : variance for normal weight initialization -- Float
-    I_AM_SPEED (False) : use compiled C++ autograd backend if True -- Bool
     """
     def __init__(self, neurons: List[int], activation_function: List[str] = [],
                  loss_function: str = 'mse', learning_rate: float = 0.1, loss_threshold: float = 0.01,
@@ -459,3 +458,62 @@ class FeedForwardNN:
         if arr.shape[1] == 1:
             return arr.flatten()
         return np.argmax(arr, axis=1).astype(int)
+
+    def save(self, path: str) -> None:
+        import json
+        all_layers = [self.input_layer] + self.hidden_layers + [self.output_layer]
+        weights_data = []
+        for layer in all_layers:
+            weights_data.append({
+                "weights": [[w.data for w in row] for row in layer.weights],
+                "biases":  [b.data for b in layer.biases]
+            })
+        model_data = {
+            "neurons":             self.neurons,
+            "activation_function": self.activation_function,
+            "loss_function":       self.loss_function,
+            "learning_rate":       self.learning_rate,
+            "loss_threshold":      self.loss_threshold,
+            "epochs":              self.epochs,
+            "batch_size":          self.batch_size,
+            "l1":                  self.l1,
+            "l2":                  self.l2,
+            "optimizer":           "adam" if self._adam is not None else "sgd",
+            "adam_beta1":          self._adam.beta1    if self._adam else 0.9,
+            "adam_beta2":          self._adam.beta2    if self._adam else 0.999,
+            "adam_epsilon":        self._adam.epsilon  if self._adam else 1e-8,
+            "weights":             weights_data,
+            "history":             self.history,
+        }
+        with open(path, "w") as f:
+            json.dump(model_data, f, indent=2)
+
+    @classmethod
+    def load(cls, path: str) -> "FeedForwardNN":
+        import json
+        with open(path, "r") as f:
+            d = json.load(f)
+        model = cls(
+            neurons=d["neurons"],
+            activation_function=d["activation_function"],
+            loss_function=d["loss_function"],
+            learning_rate=d["learning_rate"],
+            loss_threshold=d["loss_threshold"],
+            epochs=d["epochs"],
+            batch_size=d["batch_size"],
+            l1=d["l1"],
+            l2=d["l2"],
+            optimizer=d["optimizer"],
+            adam_beta1=d["adam_beta1"],
+            adam_beta2=d["adam_beta2"],
+            adam_epsilon=d["adam_epsilon"],
+        )
+        all_layers = [model.input_layer] + model.hidden_layers + [model.output_layer]
+        for layer, layer_data in zip(all_layers, d["weights"]):
+            for i, row in enumerate(layer.weights):
+                for j, w in enumerate(row):
+                    w.data = layer_data["weights"][i][j]
+            for j, b in enumerate(layer.biases):
+                b.data = layer_data["biases"][j]
+        model.history = d.get("history", {"train_loss": [], "val_loss": []})
+        return model
