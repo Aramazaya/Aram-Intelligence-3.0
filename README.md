@@ -5,19 +5,20 @@ Implementation of Feedforward Neural Network (FFNN) from scratch
 
 ## Experiments
 Experiments within the notebook provided include:
-- Hyperparameter
+- Layer depth and width
 - Hidden Layer Activation Function
 - Learning Rate
+- Weight initialization
 - Regularisation L1 vs L2 vs None
-- Comparison with sklearn MLP
+- Comparison with sklearn MLP library
 - Comparison of Convergence Speed with Adam Optimizer
 
 ## How to setup
-All algorithms, dataset, as well as the necessary imports have been put together inside the Jupyter Notebook in `src/Notebook.ipynb` which includes Exploratory Data Analysis, Data Preprocessing, as well as the model itself.
+All algorithms, dataset, as well as the necessary imports have been put together inside the Jupyter Notebook in `src/Notebook.ipynb` which includes dataset, model, as well as necessary libraries, Exploratory Data Analysis, Data Preprocessing, and the experiments. The implemented FFNN is in the `ffnn.py` file and the implemented adam optimizer is in the `adamoptimizer.py` file.
 
 Simply open the notebook with a supported application or website such as an IDE, Google Colab, Deepnote, etc. and press the `Run All` Button.
 
-You do need to install all library:
+When running on an IDE, the necessary libraries will need to be installed beforehand using `pip install`. The libraries needed include:
 - sklearn
 - pandas
 - numpy
@@ -29,7 +30,7 @@ You do need to install all library:
 
 | Nama | NIM | Pembagian Tugas |
 |----------|----------| -- |
-| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Adam Optimizer, Notebook |
+| Sebastian Hung Yansen | 13523070 | Laporan, Pengujian, Implementasi Adam Optimizer, Notebook |
 | Aramazaya | 13523082 | FFNN model, Autograd, Xavier&He Weight, Leaky ReLU & eLU |
 
 </center>
